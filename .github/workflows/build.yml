@@ -1,0 +1,67 @@
+name: Build LAN Remote
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android command-line tools
+        shell: bash
+        run: |
+          set -euxo pipefail
+          SDK="$RUNNER_TEMP/android-sdk"
+          mkdir -p "$SDK/cmdline-tools"
+          curl -L --retry 3 -o "$RUNNER_TEMP/cmdline-tools.zip" "https://dl.google.com/android/repository/commandlinetools-linux-12266719_latest.zip"
+          unzip -q "$RUNNER_TEMP/cmdline-tools.zip" -d "$RUNNER_TEMP/cmdline-tools-unpack"
+          mkdir -p "$SDK/cmdline-tools/latest"
+          mv "$RUNNER_TEMP/cmdline-tools-unpack/cmdline-tools/"* "$SDK/cmdline-tools/latest/"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - name: Build Android APK
+        run: cd android && gradle --no-daemon assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LANRemote-Android
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install 32-bit MinGW-w64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW32
+          update: true
+          install: mingw-w64-i686-gcc
+      - name: Build native Win32 x86 client
+        shell: msys2 {0}
+        run: |
+          cd windows
+          i686-w64-mingw32-g++ -std=gnu++11 -O2 -s -mwindows -D_WIN32_WINNT=0x0601 -DWINVER=0x0601 lanremote.cpp -o LANRemote.exe -static -static-libgcc -static-libstdc++ -lgdiplus -lws2_32 -lole32 -luuid -lcomctl32 -lwinmm
+          echo "=== PE imports ==="
+          objdump -p LANRemote.exe | grep "DLL Name" || true
+          if objdump -p LANRemote.exe | grep -qi "libwinpthread-1.dll"; then echo "ERROR: unwanted libwinpthread dependency"; exit 1; fi
+          file LANRemote.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LANRemote-Windows-Win32-x86
+          path: windows/LANRemote.exe
